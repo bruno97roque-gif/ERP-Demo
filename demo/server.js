@@ -101,12 +101,13 @@ const can = (u, ...roles) => { if (!roles.includes(u.role)) fail(403, `El rol ${
 // ---------- rutas ----------
 const routes = {
   'GET /api/users': () => q('SELECT * FROM users'),
-  'GET /api/items': () => q(`SELECT i.*, (SELECT group_concat(s.name||' x'||r.qty, ', ') FROM recipe_lines r JOIN items s ON s.id=r.supply_id WHERE r.product_id=i.id) recipe FROM items i ORDER BY kind, name`),
+  'GET /api/items': () => q(`SELECT i.*, (SELECT group_concat(s.name||' x'||printf('%g',r.qty), ', ') FROM recipe_lines r JOIN items s ON s.id=r.supply_id WHERE r.product_id=i.id) recipe FROM items i ORDER BY kind, name`),
   'GET /api/movements': () => q('SELECT m.*, i.name item, u.name user FROM movements m JOIN items i ON i.id=m.item_id LEFT JOIN users u ON u.id=m.user_id ORDER BY m.id DESC LIMIT 60'),
-  'POST /api/purchase': (b, u) => { can(u, 'ADMIN'); return tx(() => { stockMove(b.item_id, +b.qty, 'PURCHASE_IN', b.ref || 'Compra', u.id); return { ok: true }; }); },
+  'POST /api/purchase': (b, u) => { can(u, 'ADMIN'); if (!(b.qty > 0)) fail(400, 'Cantidad invalida'); return tx(() => { stockMove(b.item_id, +b.qty, 'PURCHASE_IN', b.ref || 'Compra', u.id); return { ok: true }; }); },
   'POST /api/products': (b, u) => { // arreglo nuevo al vuelo
     can(u, 'ADMIN', 'SALES');
-    if (!b.name || !(b.price > 0) || !b.recipe?.length) fail(400, 'Nombre, precio y receta son obligatorios');
+    if (!b.name?.trim() || !(b.price > 0) || !b.recipe?.length) fail(400, 'Nombre, precio y receta son obligatorios');
+    if (b.recipe.some((r) => !(r.qty > 0) || !one("SELECT 1 FROM items WHERE id=? AND kind='SUPPLY'", r.supply_id))) fail(400, 'Receta invalida');
     return tx(() => {
       const sku = 'ARR-' + Date.now().toString(36).toUpperCase();
       const id = addProduct(sku, b.name, +b.price, b.recipe.map((r) => [+r.supply_id, +r.qty]), u.id);
@@ -117,21 +118,33 @@ const routes = {
   'POST /api/sales': (b, u) => { // venta POS
     can(u, 'ADMIN', 'SALES');
     if (!one('SELECT id FROM cash_sessions WHERE closed_at IS NULL')) fail(409, 'La caja esta cerrada. Abrela primero.');
+    // El precio sale de la base, nunca del cliente.
+    const lines = (b.lines || []).map((l) => {
+      const it = one("SELECT id, price FROM items WHERE id=? AND kind<>'SUPPLY'", l.item_id);
+      if (!it) fail(400, 'Producto invalido');
+      if (!(l.qty > 0) || !Number.isInteger(l.qty)) fail(400, 'Cantidad invalida');
+      return { item_id: it.id, qty: l.qty, price: it.price };
+    });
+    const total = lines.reduce((a, l) => a + l.qty * l.price, 0);
+    const paying = (b.payments || []).reduce((a, p) => a + (+p.amount || 0), 0);
+    if (paying < 0 || paying > total + 0.001) fail(400, 'El pago no puede superar el total');
+    if (total - paying > 0.001 && !b.customer?.trim()) fail(400, 'Indica el cliente: la venta queda con saldo pendiente');
     return tx(() => {
-      const id = createSale({ source: 'POS', sellerId: u.id, customer: b.customer, lines: b.lines, payments: b.payments, userId: u.id });
+      const id = createSale({ source: 'POS', sellerId: u.id, customer: b.customer?.trim(), lines, payments: b.payments, userId: u.id });
       refreshStatus(id);
       fulfill(id, u.id, 'SALE_OUT');
       return { id, status: one('SELECT status FROM sales WHERE id=?', id).status };
     });
   },
   'GET /api/sales': () => q(`SELECT s.*, u.name seller, COALESCE((SELECT SUM(amount) FROM payments WHERE sale_id=s.id),0) paid,
-    (SELECT group_concat(i.name||' x'||l.qty, ', ') FROM sale_lines l JOIN items i ON i.id=l.item_id WHERE l.sale_id=s.id) detail
+    (SELECT group_concat(i.name||' x'||printf('%g',l.qty), ', ') FROM sale_lines l JOIN items i ON i.id=l.item_id WHERE l.sale_id=s.id) detail
     FROM sales s LEFT JOIN users u ON u.id=s.seller_id ORDER BY s.id DESC LIMIT 50`),
   'POST /api/payments': (b, u) => { // cobranza
     can(u, 'ADMIN', 'SALES');
     return tx(() => {
       const s = one('SELECT * FROM sales WHERE id=?', b.sale_id);
       if (!s) fail(404, 'Venta no existe');
+      if (!(b.amount > 0)) fail(400, 'Monto invalido');
       const pending = s.total - paidOf(s.id);
       if (b.amount > pending + 0.001) fail(400, `El saldo pendiente es ${pending.toFixed(2)}`);
       run('INSERT INTO payments(sale_id,method,amount,reference) VALUES(?,?,?,?)', s.id, b.method, b.amount, b.reference || null);
@@ -142,13 +155,15 @@ const routes = {
   'GET /api/receivables': () => q(`SELECT s.id, s.customer, s.total, s.created_at, s.total-COALESCE((SELECT SUM(amount) FROM payments WHERE sale_id=s.id),0) pending
     FROM sales s WHERE s.status IN ('UNPAID','PARTIAL') ORDER BY s.id`),
   'GET /api/production': () => q(`SELECT o.*, i.name product, s.customer,
-    (SELECT group_concat(x.name||' x'||(r.qty*o.qty), ', ') FROM recipe_lines r JOIN items x ON x.id=r.supply_id WHERE r.product_id=o.product_id) needs
+    (SELECT group_concat(x.name||' x'||printf('%g',r.qty*o.qty), ', ') FROM recipe_lines r JOIN items x ON x.id=r.supply_id WHERE r.product_id=o.product_id) needs
     FROM production_orders o JOIN items i ON i.id=o.product_id JOIN sales s ON s.id=o.sale_id ORDER BY o.id DESC`),
   'POST /api/production/status': (b, u) => {
     can(u, 'ADMIN', 'PRODUCTION');
     return tx(() => {
       const o = one('SELECT * FROM production_orders WHERE id=?', b.id);
       if (!o) fail(404, 'Orden no existe');
+      const next = { PENDING: 'IN_PROGRESS', IN_PROGRESS: 'DONE' }[o.status];
+      if (b.status !== next) fail(409, 'La comanda ya cambio de estado. Actualiza la pantalla.');
       if (b.status === 'DONE' && o.status !== 'DONE')
         for (const r of q('SELECT * FROM recipe_lines WHERE product_id=?', o.product_id)) stockMove(r.supply_id, -r.qty * o.qty, 'PRODUCTION_CONSUME', `Comanda #${o.id}`, u.id);
       run('UPDATE production_orders SET status=? WHERE id=?', b.status, o.id);
@@ -157,6 +172,7 @@ const routes = {
   },
   'POST /api/waste': (b, u) => {
     can(u, 'ADMIN', 'PRODUCTION');
+    if (!(b.qty > 0)) fail(400, 'Cantidad invalida');
     return tx(() => {
       stockMove(b.item_id, -b.qty, 'WASTE', b.reason, u.id);
       run('INSERT INTO waste(item_id,qty,reason,user_id) VALUES(?,?,?,?)', b.item_id, b.qty, b.reason, u.id);
@@ -197,6 +213,7 @@ const routes = {
   },
   'POST /api/goals': (b, u) => {
     can(u, 'ADMIN');
+    if (!(b.target > 0)) fail(400, 'Monto invalido');
     run('DELETE FROM goals WHERE seller_id=? AND period=?', b.seller_id, b.period || month());
     run('INSERT INTO goals(seller_id,period,target) VALUES(?,?,?)', b.seller_id, b.period || month(), +b.target);
     return { ok: true };

@@ -3,201 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ERP Floreria - Demo</title>
-<style>
-:root{--bg:#faf7f8;--card:#fff;--ink:#2b2327;--mute:#7b6f75;--line:#eadfe3;--brand:#b83266;--brand2:#fbe8ef;--ok:#2e7d4f;--warn:#b7791f;--bad:#c0392b}
-@media (prefers-color-scheme:dark){:root{--bg:#1b1619;--card:#251e22;--ink:#f1e8ec;--mute:#a99ba2;--line:#3a2f35;--brand:#e0709a;--brand2:#3a2330}}
-*{box-sizing:border-box}body{margin:0;font:14px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
-header{display:flex;gap:12px;align-items:center;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap}
-header h1{font-size:17px;margin:0;color:var(--brand)}header .sp{flex:1}
-nav{display:flex;gap:4px;padding:8px 16px;overflow-x:auto}
-nav button{border:0;background:none;padding:8px 12px;border-radius:8px;cursor:pointer;color:var(--mute);font:inherit;white-space:nowrap}
-nav button.on{background:var(--brand2);color:var(--brand);font-weight:600}
-main{padding:8px 16px 40px;max-width:1150px;margin:auto}
-.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
-.card h3{margin:0 0 10px;font-size:14px}
-table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}th{color:var(--mute);font-weight:500}
-td.n,th.n{text-align:right}
-input,select,button.b{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink)}
-button.b{background:var(--brand);color:#fff;border-color:var(--brand);cursor:pointer}button.b.alt{background:none;color:var(--brand)}button.b:disabled{opacity:.5}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
-.tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;background:var(--brand2);color:var(--brand)}
-.tag.ok{background:#dff3e6;color:var(--ok)}.tag.warn{background:#fdf0d5;color:var(--warn)}.tag.bad{background:#fbe0dc;color:var(--bad)}
-.prod{display:flex;justify-content:space-between;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;cursor:pointer}
-.prod:hover{border-color:var(--brand)}.mute{color:var(--mute);font-size:12px}
-.bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--brand)}
-.cols{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}@media(max-width:720px){.cols{grid-template-columns:1fr}}
-#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;display:none;max-width:90%;z-index:9}
-</style>
+<title>Floreria ERP</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header>
-  <h1>ERP Floreria <span class="mute">demo local</span></h1><span class="sp"></span>
-  <span class="mute">Usuario:</span><select id="user"></select>
-  <span id="cashTag"></span>
-</header>
-<nav id="nav"></nav>
-<main id="view"></main>
-<div id="toast"></div>
-<script>
-const $ = (s, el = document) => el.querySelector(s);
-const money = (n) => 'S/ ' + Number(n || 0).toFixed(2);
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-let me = null, users = [], items = [], cart = [], tab = 'pos';
-
-async function api(path, body) {
-  const r = await fetch('/api' + path, {
-    method: body ? 'POST' : 'GET',
-    headers: { 'content-type': 'application/json', 'x-user': me?.id || 1 },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || 'Error');
-  return j;
-}
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 3500); }
-const act = (fn) => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message); } };
-
-const TABS = {
-  pos: ['Punto de venta', ['ADMIN', 'SALES']],
-  production: ['Produccion', ['ADMIN', 'PRODUCTION', 'SALES']],
-  inventory: ['Inventario', ['ADMIN', 'SALES', 'PRODUCTION']],
-  waste: ['Mermas', ['ADMIN', 'PRODUCTION']],
-  finance: ['Cobranza', ['ADMIN', 'SALES']],
-  reports: ['Reportes', ['ADMIN']],
-  shopify: ['Shopify', ['ADMIN']],
-};
-
-async function init() {
-  users = await api('/users');
-  me = users[0];
-  $('#user').innerHTML = users.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('');
-  $('#user').onchange = () => { me = users.find((u) => u.id == $('#user').value); cart = []; render(); };
-  render();
-}
-async function render() {
-  const allowed = Object.entries(TABS).filter(([, [, roles]]) => roles.includes(me.role));
-  if (!allowed.find(([k]) => k === tab)) tab = allowed[0][0];
-  $('#nav').innerHTML = allowed.map(([k, [n]]) => `<button class="${k === tab ? 'on' : ''}" onclick="tab='${k}';render()">${n}</button>`).join('');
-  items = await api('/items');
-  const cash = await api('/cash');
-  const open = cash.session && !cash.session.closed_at;
-  $('#cashTag').innerHTML = `<span class="tag ${open ? 'ok' : 'bad'}">Caja ${open ? 'abierta' : 'cerrada'}</span>`;
-  await VIEWS[tab](cash);
-}
-
-const VIEWS = {
-  async pos(cash) {
-    const open = cash.session && !cash.session.closed_at;
-    const sellable = items.filter((i) => i.kind !== 'SUPPLY');
-    const total = cart.reduce((a, l) => a + l.qty * l.price, 0);
-    $('#view').innerHTML = `<div class="grid">
-      <div class="card"><h3>Catalogo</h3>
-        ${sellable.map((i) => `<div class="prod" onclick="addCart(${i.id})"><div><b>${esc(i.name)}</b><div class="mute">${i.kind === 'PRODUCT' ? esc(i.recipe || '') : 'Stock: ' + i.stock}</div></div><div>${money(i.price)}</div></div>`).join('')}
-        <div class="row"><button class="b alt" onclick="newProduct()">+ Nuevo arreglo</button></div>
-      </div>
-      <div class="card"><h3>Venta actual</h3>
-        <table>${cart.map((l, k) => `<tr><td>${esc(l.name)}</td><td class="n"><input type="number" min="1" value="${l.qty}" style="width:56px" onchange="cart[${k}].qty=+this.value;render()"></td><td class="n">${money(l.qty * l.price)}</td><td><button class="b alt" onclick="cart.splice(${k},1);render()">x</button></td></tr>`).join('') || '<tr><td class="mute">Toca un producto para agregarlo</td></tr>'}</table>
-        <p><b>Total: ${money(total)}</b></p>
-        <div class="row"><input id="cust" placeholder="Cliente (opcional)"></div>
-        <div class="row"><select id="method"><option>EFECTIVO</option><option>TARJETA</option><option>YAPE_PLIN</option><option>TRANSFERENCIA</option><option>CULQI</option></select>
-          <input id="pay" type="number" placeholder="Monto pagado" value="${total || ''}"><button class="b" ${open && cart.length ? '' : 'disabled'} onclick="checkout()">Cobrar</button></div>
-        <div class="mute">Si pagas menos del total, queda como cuenta por cobrar.</div>
-      </div>
-      <div class="card"><h3>Caja</h3>
-        ${open ? `<p>Fondo inicial ${money(cash.session.opening_float)} + efectivo cobrado ${money(cash.cash_in)}<br><b>Esperado en caja: ${money(cash.expected)}</b></p>
-          <div class="row"><input id="counted" type="number" placeholder="Efectivo contado"><button class="b" onclick="closeCash()">Cerrar caja</button></div>`
-        : `<p class="mute">La caja esta cerrada.</p><div class="row"><input id="float" type="number" placeholder="Fondo inicial" value="200"><button class="b" onclick="openCash()">Abrir caja</button></div>`}
-      </div></div>`;
-  },
-  async production() {
-    const list = await api('/production');
-    const col = (st, title) => `<div class="card"><h3>${title} (${list.filter((o) => o.status === st).length})</h3>${list.filter((o) => o.status === st).map((o) => `
-      <div class="prod" style="display:block"><b>#${o.id} ${esc(o.product)} x${o.qty}</b><div class="mute">${esc(o.customer)} - Venta #${o.sale_id}</div><div class="mute">Insumos: ${esc(o.needs)}</div>
-      <div class="row">${st === 'PENDING' ? `<button class="b" onclick="setStatus(${o.id},'IN_PROGRESS')">Empezar</button>` : ''}${st === 'IN_PROGRESS' ? `<button class="b" onclick="setStatus(${o.id},'DONE')">Terminar</button>` : ''}</div></div>`).join('') || '<div class="mute">Sin ordenes</div>'}</div>`;
-    $('#view').innerHTML = `<p class="mute">Comandas digitales. Al terminar una, se descuentan los insumos segun su receta.</p><div class="cols">${col('PENDING', 'Pendientes')}${col('IN_PROGRESS', 'En proceso')}${col('DONE', 'Listas')}</div>`;
-  },
-  async inventory() {
-    const mv = await api('/movements');
-    const supplies = items.filter((i) => i.kind === 'SUPPLY');
-    $('#view').innerHTML = `<div class="grid"><div class="card" style="grid-column:1/-1"><h3>Stock en tiempo real</h3><table><tr><th>SKU</th><th>Item</th><th>Tipo</th><th class="n">Stock</th><th>Estado</th></tr>
-      ${items.filter((i) => i.kind !== 'PRODUCT').map((i) => `<tr><td>${esc(i.sku)}</td><td>${esc(i.name)}</td><td>${i.kind === 'SUPPLY' ? 'Insumo' : 'Reventa'}</td><td class="n">${i.stock} ${esc(i.unit)}</td><td><span class="tag ${i.stock <= i.min_stock ? 'bad' : 'ok'}">${i.stock <= i.min_stock ? 'Bajo' : 'OK'}</span></td></tr>`).join('')}</table></div>
-      ${me.role === 'ADMIN' ? `<div class="card"><h3>Ingreso de mercaderia</h3><div class="row"><select id="pitem">${items.filter((i) => i.kind !== 'PRODUCT').map((i) => `<option value="${i.id}">${esc(i.name)}</option>`).join('')}</select><input id="pqty" type="number" min="1" placeholder="Cantidad" style="width:100px"><button class="b" onclick="purchase()">Ingresar</button></div></div>` : ''}
-      <div class="card" style="grid-column:1/-1"><h3>Libro de movimientos (ultimos 60)</h3><table><tr><th>Fecha</th><th>Item</th><th>Tipo</th><th class="n">Cant.</th><th>Ref</th><th>Usuario</th></tr>
-      ${mv.map((m) => `<tr><td>${m.created_at}</td><td>${esc(m.item)}</td><td><span class="tag">${m.type}</span></td><td class="n">${m.qty > 0 ? '+' : ''}${m.qty}</td><td>${esc(m.ref)}</td><td>${esc(m.user || '')}</td></tr>`).join('')}</table></div></div>`;
-  },
-  async waste() {
-    const w = await api('/waste');
-    $('#view').innerHTML = `<div class="grid"><div class="card"><h3>Registrar merma</h3><div class="row"><select id="witem">${items.filter((i) => i.kind !== 'PRODUCT').map((i) => `<option value="${i.id}">${esc(i.name)} (${i.stock})</option>`).join('')}</select><input id="wqty" type="number" min="1" placeholder="Cantidad" style="width:100px">
-      <select id="wreason"><option value="MARCHITA">Marchita</option><option value="DANADA">Danada</option><option value="VENCIDA">Vencida</option><option value="ERROR_PRODUCCION">Error de produccion</option><option value="OTRO">Otro</option></select><button class="b" onclick="addWaste()">Registrar</button></div></div>
-      <div class="card" style="grid-column:1/-1"><h3>Historial</h3><table><tr><th>Fecha</th><th>Item</th><th class="n">Cant.</th><th>Motivo</th><th>Usuario</th></tr>${w.map((x) => `<tr><td>${x.created_at}</td><td>${esc(x.item)}</td><td class="n">${x.qty}</td><td>${esc(x.reason)}</td><td>${esc(x.user)}</td></tr>`).join('') || '<tr><td class="mute">Sin mermas</td></tr>'}</table></div></div>`;
-  },
-  async finance() {
-    const [rc, sales] = await Promise.all([api('/receivables'), api('/sales')]);
-    const st = { PAID: 'ok', PARTIAL: 'warn', UNPAID: 'bad', PENDING_PAYMENT: 'warn' };
-    $('#view').innerHTML = `<div class="grid"><div class="card" style="grid-column:1/-1"><h3>Cuentas por cobrar (${money(rc.reduce((a, r) => a + r.pending, 0))})</h3><table><tr><th>Venta</th><th>Cliente</th><th class="n">Total</th><th class="n">Saldo</th><th>Cobrar</th></tr>
-      ${rc.map((r) => `<tr><td>#${r.id}</td><td>${esc(r.customer)}</td><td class="n">${money(r.total)}</td><td class="n">${money(r.pending)}</td><td><input id="amt${r.id}" type="number" value="${r.pending}" style="width:90px"> <button class="b" onclick="collect(${r.id})">Cobrar</button></td></tr>`).join('') || '<tr><td class="mute">Nada pendiente</td></tr>'}</table></div>
-      <div class="card" style="grid-column:1/-1"><h3>Ventas recientes</h3><table><tr><th>#</th><th>Origen</th><th>Cliente</th><th>Detalle</th><th>Vendedor</th><th class="n">Total</th><th>Estado</th></tr>
-      ${sales.map((s) => `<tr><td>${s.id}</td><td>${s.source}</td><td>${esc(s.customer)}</td><td>${esc(s.detail)}</td><td>${esc(s.seller || '-')}</td><td class="n">${money(s.total)}</td><td><span class="tag ${st[s.status] || ''}">${s.status}</span></td></tr>`).join('')}</table></div></div>`;
-  },
-  async reports() {
-    const r = await api('/reports');
-    const max = Math.max(1, ...r.top_products.map((p) => p.qty));
-    $('#view').innerHTML = `<div class="grid">
-      <div class="card"><h3>Ingresos</h3><p>Cobrado: <b>${money(r.income.collected)}</b><br>Por cobrar: <b>${money(r.income.receivable)}</b></p>${r.by_source.map((s) => `<div class="mute">${s.source}: ${s.sales} ventas - ${money(s.total)}</div>`).join('')}</div>
-      <div class="card"><h3>Productos mas vendidos</h3>${r.top_products.map((p) => `<div style="margin:6px 0"><div class="row" style="justify-content:space-between;margin:0"><span>${esc(p.name)}</span><span>${p.qty} u. - ${money(p.revenue)}</span></div><div class="bar"><i style="width:${p.qty / max * 100}%"></i></div></div>`).join('') || '<span class="mute">Aun sin ventas</span>'}</div>
-      <div class="card"><h3>Ventas por vendedor</h3><table>${r.by_seller.map((s) => `<tr><td>${esc(s.name)}</td><td class="n">${s.sales} ventas</td><td class="n">${money(s.total)}</td></tr>`).join('') || '<tr><td class="mute">Sin ventas</td></tr>'}</table></div>
-      <div class="card"><h3>Metas de venta (${r.goals[0]?.period || ''})</h3>${r.goals.map((g) => { const p = Math.min(100, g.sold / g.target * 100); return `<div style="margin:8px 0"><div class="row" style="justify-content:space-between;margin:0"><span>${esc(g.name)}</span><span>${money(g.sold)} / ${money(g.target)} <span class="tag ${g.sold >= g.target ? 'ok' : 'warn'}">${g.sold >= g.target ? 'ALCANZADA' : p.toFixed(0) + '%'}</span></span></div><div class="bar"><i style="width:${p}%"></i></div></div>`; }).join('')}
-        <div class="row"><select id="gseller">${users.filter((u) => u.role === 'SALES').map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select><input id="gtarget" type="number" placeholder="Nueva meta S/" style="width:120px"><button class="b" onclick="setGoal()">Fijar meta</button></div></div>
-      <div class="card"><h3>Stock bajo</h3>${r.low_stock.map((s) => `<div>${esc(s.name)}: <span class="tag bad">${s.stock} ${esc(s.unit)}</span></div>`).join('') || '<span class="mute">Todo en orden</span>'}</div></div>`;
-  },
-  async shopify() {
-    const ev = await api('/shopify/events');
-    const prods = items.filter((i) => i.kind !== 'SUPPLY');
-    $('#view').innerHTML = `<div class="grid"><div class="card"><h3>Simulador de pedido Shopify</h3>
-      <div class="mute">Envia webhooks como los de Shopify. <b>orders/create</b> solo registra; <b>orders/paid</b> descuenta stock.</div>
-      <div class="row"><select id="ssku">${prods.map((i) => `<option value="${esc(i.sku)}">${esc(i.name)}</option>`).join('')}<option value="SKU-DESCONOCIDO">SKU sin mapeo (prueba)</option></select><input id="sqty" type="number" value="1" min="1" style="width:70px"></div>
-      <div class="row"><button class="b" onclick="shop('orders/create')">1. Crear pedido</button><button class="b" onclick="shop('orders/paid')">2. Marcar pagado</button><button class="b alt" onclick="shop('orders/paid',true)">Reenviar ultimo webhook (duplicado)</button></div>
-      <div class="mute" id="slast"></div></div>
-      <div class="card" style="grid-column:1/-1"><h3>Eventos recibidos</h3><table><tr><th>Webhook</th><th>Topic</th><th>Estado</th><th>Nota</th></tr>${ev.map((e) => `<tr><td>${esc(e.webhook_id)}</td><td>${e.topic}</td><td><span class="tag ${e.status === 'OK' ? 'ok' : 'bad'}">${e.status}</span></td><td>${esc(e.note)}</td></tr>`).join('') || '<tr><td class="mute">Sin eventos</td></tr>'}</table></div></div>`;
-    if (shop.last) $('#slast').textContent = 'Ultimo pedido: ' + shop.last.order;
-  },
-};
-
-// ---- acciones ----
-window.addCart = (id) => { const i = items.find((x) => x.id === id); const l = cart.find((x) => x.item_id === id); if (l) l.qty++; else cart.push({ item_id: id, name: i.name, qty: 1, price: i.price }); render(); };
-window.checkout = act(async () => {
-  const total = cart.reduce((a, l) => a + l.qty * l.price, 0);
-  const amount = Math.min(+$('#pay').value || 0, total);
-  const r = await api('/sales', { customer: $('#cust').value, lines: cart.map(({ item_id, qty, price }) => ({ item_id, qty, price })), payments: [{ method: $('#method').value, amount }] });
-  cart = []; toast(`Venta #${r.id} registrada (${r.status})`); render();
-});
-window.openCash = act(async () => { await api('/cash/open', { opening_float: +$('#float').value }); render(); });
-window.closeCash = act(async () => { const r = await api('/cash/close', { counted: +$('#counted').value }); toast(`Caja cerrada. Esperado ${money(r.expected)}, contado ${money(r.counted)}, diferencia ${money(r.difference)}`); render(); });
-window.newProduct = act(async () => {
-  const supplies = items.filter((i) => i.kind === 'SUPPLY');
-  const name = prompt('Nombre del arreglo:'); if (!name) return;
-  const price = +prompt('Precio de venta (S/):'); if (!price) return;
-  const txt = prompt('Receta: insumo-cantidad separados por coma.\nInsumos disponibles:\n' + supplies.map((s) => `${s.id}=${s.name}`).join('\n') + '\n\nEjemplo: 1-12,5-3 (12 de id 1, 3 de id 5)');
-  if (!txt) return;
-  const recipe = txt.split(',').map((p) => { const [s, q] = p.trim().split('-'); return { supply_id: +s, qty: +q }; });
-  await api('/products', { name, price, recipe }); toast('Arreglo creado y listado'); render();
-});
-window.setStatus = act(async (id, status) => { await api('/production/status', { id, status }); render(); });
-window.purchase = act(async () => { await api('/purchase', { item_id: +$('#pitem').value, qty: +$('#pqty').value }); render(); });
-window.addWaste = act(async () => { await api('/waste', { item_id: +$('#witem').value, qty: +$('#wqty').value, reason: $('#wreason').value }); toast('Merma registrada'); render(); });
-window.collect = act(async (id) => { await api('/payments', { sale_id: id, amount: +$('#amt' + id).value, method: 'EFECTIVO' }); render(); });
-window.setGoal = act(async () => { await api('/goals', { seller_id: +$('#gseller').value, target: +$('#gtarget').value }); render(); });
-window.shop = act(async (topic, dup) => {
-  if (!dup && topic === 'orders/create') shop.last = { order: '#' + (1000 + Math.floor(Math.random() * 9000)), sku: $('#ssku').value, qty: +$('#sqty').value };
-  const l = shop.last; if (!l) throw new Error('Primero crea un pedido');
-  const r = await api('/shopify/webhook', { webhook_id: dup ? l.id : (l.id = 'wh_' + Math.random().toString(36).slice(2, 8)), topic, shopify_order: l.order, customer: 'Cliente Shopify', line_items: [{ sku: l.sku, qty: l.qty }] });
-  toast(r.duplicated ? 'Webhook duplicado ignorado (idempotente)' : 'Webhook procesado: ' + (r.status || 'OK')); render();
-});
-shop.last = null;
-window.render = render;
-init();
-</script>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="logo">✿</span><div><b>Floreria</b><small>ERP · demo</small></div></div>
+    <nav id="nav"></nav>
+    <div class="side-foot">
+      <div id="cashBox"></div>
+      <label class="user-pick"><span id="avatar" class="avatar"></span>
+        <span class="who"><small>Sesion de</small><select id="user"></select></span></label>
+    </div>
+  </aside>
+  <main>
+    <header class="top"><div><h1 id="title"></h1><p id="subtitle"></p></div><div id="topActions" class="top-actions"></div></header>
+    <section id="view"></section>
+  </main>
+</div>
+<div id="modal" class="modal" hidden></div>
+<div id="toasts" class="toasts"></div>
+<script src="app.js"></script>
 </body>
 </html>

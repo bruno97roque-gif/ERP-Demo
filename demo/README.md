@@ -10,6 +10,10 @@ node server.js
 
 Los datos viven en memoria y se reinician al reiniciar el servidor (usa `DB_FILE=erp.db node server.js` para persistir).
 
+## Atajos del POS
+
+- `/` buscar producto · `Enter` agrega el primer resultado · `F9` cobrar · `Esc` cierra ventanas.
+
 ## Que probar
 
 1. **POS:** vende un ramo y paga parcial. Queda como cuenta por cobrar y se crea una comanda.
