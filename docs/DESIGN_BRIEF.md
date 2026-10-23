@@ -10,7 +10,7 @@ ERP a medida para una floreria con una tienda fisica, una bodega y tienda online
 |---|---|---|---|
 | Administracion | Dueño/a o encargado | Todo | Todo: ingresos de mercaderia, metas, reportes, Shopify |
 | Ventas | Cajeros/vendedores | POS, Produccion (solo lectura), Inventario, Cobranza | Vender, abrir/cerrar caja, cobrar saldos, crear arreglos |
-| Produccion | Floristas | Produccion, Inventario, Mermas | Mover comandas, registrar mermas |
+| Produccion | Floristas | Produccion, Inventario, Planillas (solo mermas) | Mover comandas, registrar mermas |
 
 Uso principal: computadora de mostrador (POS) y tablet o pantalla en el taller (Produccion). Debe funcionar en celular.
 
@@ -67,12 +67,33 @@ Atajos: `/` buscar · `Enter` agrega el primer resultado · `F9` cobrar · `Esc`
 - 4 KPIs: Items con stock · Stock bajo (en rojo, con nombres) · Valor a costo · Movimientos registrados.
 - Tabla **Stock actual**: item (nombre, SKU, tipo, minimo), stock + unidad, barra de nivel (verde/rosa/rojo segun minimo).
 - Tabla **Libro de movimientos** (ultimos 60, con scroll): fecha, item + referencia + usuario, tipo como etiqueta de color (Ingreso, Venta, Shopify, Produccion, Merma), cantidad +verde / −rojo.
-- Admin: boton "Ingreso de mercaderia" → modal con item, cantidad, referencia (proveedor/guia).
+- Admin: botones "Ingreso de mercaderia" y "Conteo fisico" que abren la planilla correspondiente.
 
-### 3.4 Mermas
-- Formulario: insumo o producto (con stock actual), cantidad, motivo segmentado (Marchita · Dañada · Vencida · Error de produccion · Otro), boton "Registrar merma".
-- Grafico de barras horizontales **por motivo**.
-- Historial: item, fecha, usuario, motivo (etiqueta roja), cantidad negativa.
+### 3.4 Planillas (registro en lote tipo Excel)
+**Por que celdas:** igual que el editor masivo de Shopify y WooCommerce. Al cierre del dia se revisan 30 insumos de una pasada con el teclado, se pega la guia del proveedor desde Excel y se ve el total antes de confirmar. Se guarda todo junto o nada.
+
+- Pestañas: **Ingreso de mercaderia** · **Mermas** · **Conteo fisico** (produccion solo ve Mermas).
+- Barra: filtro de items, "Solo con datos", nota (proveedor/guia), contador "N filas · S/ X · N errores", **Descartar**, **Registrar N filas**.
+- Grilla: primera columna fija (miniatura, nombre, SKU, tipo), encabezado fijo, fila de totales fija al pie.
+- Teclado: Tab/flechas para moverse, Enter baja, Esc deshace la celda. Pegar un bloque de Excel llena varias celdas.
+- Estados de celda: enfocada (borde verde), modificada (fondo ambar), error (fondo rojo con tooltip). Barra ambar a la izquierda de la fila modificada.
+- Confirmacion con resumen antes de registrar. Aviso si se cambia de pantalla con datos sin registrar.
+- **Mermas:** columnas por motivo (Marchita · Dañada · Vencida · Error prod. · Otro), total, perdida en S/ (a costo) y stock final. Rechaza mas que el stock y decimales en items enteros. Debajo: grafico de perdida por motivo en S/ e historial de planillas.
+- **Ingreso:** presentacion por fila (ej. "Paquete x25 (25 tallo)" o "Suelto"), cantidad, costo por presentacion (opcional), "Entra al stock" (+50 tallo), subtotal y stock final.
+- **Conteo fisico:** stock segun sistema, contado, diferencia (+verde / −rojo / "Cuadra") y valor.
+
+### 3.4b Catalogo y ficha de producto
+- Recuadro de ayuda plegable "Como se miden los productos": unidad base, presentacion de compra, por peso o medida.
+- Filtros Todo · Arreglos · Insumos · Reventa + buscador.
+- Grilla editable (admin): miniatura, nombre, SKU, tipo (etiqueta), unidad base, presentaciones (chips "Paquete x25 = 25") o materiales (arreglos), costo por unidad base, precio, margen %, stock minimo, stock, boton **Ficha**. Se guarda en lote con "Guardar N cambios".
+- **Ficha de producto** (modal ancho): foto a la izquierda (subir o arrastrar, se reduce a 600 px, "Quitar foto"); a la derecha tipo segmentado con explicacion, nombre y SKU (automatico si se deja vacio).
+  - Arreglo: precio de venta, lista de materiales (insumo + cantidad con su unidad + costo de la linea, agregar/quitar), costo de materiales.
+  - Insumo/Reventa: unidad base (tallo, kg, metro…), "Permite decimales" (se marca solo para kg/m/L), costo por unidad base, precio (reventa), stock minimo, presentaciones de compra (nombre + "= N unidad base" + costo estimado). Texto que explica la conversion con un ejemplo.
+  - Pie: "Costo S/ X · Margen S/ Y (Z%)" en vivo.
+- Ventas ve el catalogo en solo lectura y puede crear arreglos nuevos.
+
+### 3.4c Venta por peso en el POS
+Productos en kg o metro piden la cantidad en un modal (botones rapidos 0.1 / 0.25 / 0.5 / 1 y total en vivo). En el ticket se muestran como "0.25 kg" con boton editar.
 
 ### 3.5 Cobranza
 - 3 KPIs: Por cobrar (y numero de ventas) · Ventas registradas · Monto vendido.
@@ -97,11 +118,11 @@ Atajos: `/` buscar · `Enter` agrega el primer resultado · `F9` cobrar · `Esc`
 ### 3.8 Modales
 | Modal | Campos | Validacion |
 |---|---|---|
-| Nuevo arreglo | Nombre, precio, filas de receta (insumo + cantidad, agregar/quitar) | Calcula **costo de insumos y margen %** en vivo; sin insumos repetidos |
+| Ficha de producto | Foto, tipo, nombre, SKU, precio, materiales o unidad/presentaciones | Costo y margen en vivo; arreglo con al menos un material; presentacion con nombre y factor |
+| Cantidad por peso | Cantidad en kg/m, atajos | Mayor a 0 |
 | Abrir caja | Fondo inicial (200 por defecto) | — |
 | Cierre de caja | Muestra fondo y efectivo cobrado; campo "efectivo contado" | Diferencia en vivo: "Cuadra exacto" o sobrante/faltante |
 | Registrar pago | Monto, metodo | No mayor al saldo |
-| Ingreso de mercaderia | Item, cantidad, referencia | Cantidad > 0 |
 | Meta de venta | Vendedor, monto | Monto > 0 |
 
 ## 4. Reglas de negocio que la UI debe reflejar
@@ -118,7 +139,8 @@ Atajos: `/` buscar · `Enter` agrega el primer resultado · `F9` cobrar · `Esc`
 
 - Usuarios: Ana (Administracion), Luis (Ventas), Marta (Ventas), Carlos (Produccion).
 - Insumos: Rosa roja, Rosa blanca, Girasol, Lirio (tallo), Follaje (rama), Papel kraft (pliego), Liston (metro), Caja de regalo.
-- Reventa: Peluche oso S/ 25, Caja de chocolates S/ 18.
+- Insumos con presentacion: Rosa (Paquete x25), Girasol y Lirio (Paquete x10), Follaje (Atado x20), Musgo preservado en **kg** (Saco 5 kg), Liston en **metros** (Rollo 50 m), Papel (Resma x50).
+- Reventa: Peluche oso S/ 25 (Caja x6), Caja de chocolates S/ 18 (Caja x12), Chocolates a granel S/ 60 por **kg**.
 - Arreglos: Ramo 12 rosas rojas S/ 85, Ramo girasoles x6 S/ 70, Caja de rosas blancas S/ 120, Arreglo de lirios S/ 95.
 - Metas: Luis S/ 3,000 y Marta S/ 2,500 en el mes.
 
@@ -132,7 +154,7 @@ Atajos: `/` buscar · `Enter` agrega el primer resultado · `F9` cobrar · `Esc`
 
 - Pantalla de **login** y perfil.
 - **Ticket imprimible** de 80 mm y vista de comanda impresa.
-- **Gestion de catalogo:** editar/archivar productos, precios, fotos reales, recetas versionadas.
+- Archivar productos y busqueda por codigo de barras.
 - **Clientes:** busqueda, historial, datos de entrega.
 - **Pedidos con entrega** (fecha, hora, direccion, dedicatoria) y vista de agenda para fechas pico (San Valentin, Dia de la Madre).
 - **Graficos por periodo** (dia/mes/año) y proyecciones.

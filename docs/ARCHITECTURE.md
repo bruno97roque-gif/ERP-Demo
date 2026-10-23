@@ -1,225 +1,226 @@
 # ERP Florería — Arquitectura
 
-Estado: propuesta v0.1 (para validar en las sesiones de levantamiento con ventas y operaciones).
+Estado: propuesta v0.2. Rediseñada con criterio "Ponytail": **reusar antes que construir y escribir solo lo que la tarea necesita**. La validación, la seguridad, el manejo de errores y la accesibilidad no se recortan nunca.
 
 ## 0. Decisiones confirmadas con el cliente
 
 | Tema | Decisión |
 |---|---|
-| Bonos | El administrador define **montos de venta a alcanzar por vendedor** (por periodo). El sistema muestra avance y cumplimiento; no calcula comisiones por reglas complejas. |
-| Recetas | **Fijas** por producto. Consumo de insumos = receta, sin override del florista. |
-| Arreglos nuevos | Usuarios autorizados pueden **crear un arreglo nuevo (con su receta) en el momento** y queda listado en el catálogo del ERP, disponible en POS. |
-| Bodegas | **Una sola bodega** por ahora. El modelo conserva `location` para crecer, pero la UI no la expone. |
-| Shopify | El stock se descuenta **al pagarse** el pedido (`orders/paid`), no al crearse. |
-| Facturación | **Fuera de alcance** (no está en el presupuesto). El ERP emite solo un *ticket de venta no fiscal*. Se deja el modelo preparado (datos de cliente: documento, razón social) para integrar un facturador después. |
-| Pagos | Suposición: **Culqi**. Ver nota abajo sobre cobro presencial vs. en línea. |
-| Impresión | Suposición: **impresora térmica** de 80 mm para tickets y comandas. |
-| Quién crea arreglos | **Administración y ventas** (producción no). |
-
-**Pagos (Culqi).** Culqi es una pasarela de cobro en línea. Para el POS en tienda, el cobro con tarjeta normalmente se hace en un terminal físico aparte, y el cajero registra el pago en el ERP. Diseño: `payment.method` (`CASH | CARD | YAPE_PLIN | TRANSFER | CULQI | OTHER`) más `reference` (código de operación). La integración directa con la API de Culqi (link de pago para pedidos por teléfono o WhatsApp, con webhook que marca el pedido como pagado) queda como módulo opcional de la fase 4. Esto está por confirmar.
-
-**Impresión térmica.** Fase inicial: ticket con CSS para 80 mm impreso desde el navegador (`window.print`), sin software extra. Mejora posible: agente local ESC/POS para impresión directa, apertura de cajón y corte automático. La comanda de producción se imprime con el mismo mecanismo (opcional, ya que existe la pantalla digital).
+| Bonos | El administrador define **montos de venta a alcanzar por vendedor** por mes. El sistema muestra avance y cumplimiento; no calcula comisiones. |
+| Recetas | **Fijas** por producto. Consumo de insumos = receta. |
+| Arreglos nuevos | **Administración y ventas** pueden crear un arreglo con su receta en el momento; queda listado y disponible en el POS. |
+| Bodegas | **Una sola bodega.** |
+| Shopify | El stock se descuenta **al pagarse** el pedido (`orders/paid`). |
+| Facturación | **Fuera de alcance.** Solo ticket de venta no fiscal. |
+| Pagos | Suposición: **Culqi** para cobros en línea; en tienda el cajero registra método y código de operación. |
+| Impresión | Suposición: **impresora térmica 80 mm**, impresión desde el navegador. |
 
 ## 1. Principios
 
-1. **Monolito modular.** Una sola aplicación desplegable, dividida en módulos con fronteras claras. Un VPS de un cliente no justifica microservicios.
-2. **Inventario como libro de movimientos.** El stock nunca se edita: se calcula sumando movimientos. Da trazabilidad, auditoría y base para mermas.
-3. **Propiedad del cliente.** Todo corre en Docker Compose sobre un VPS a nombre del cliente. Sin servicios propietarios obligatorios. Stack open source.
-4. **Tiempo real donde importa.** Stock y comandas se actualizan en vivo (WebSocket/SSE); reportes pueden ser por consulta.
-5. **Idempotencia en integraciones.** Shopify reintenta webhooks; el ERP nunca debe descontar dos veces.
+1. **Reusar antes que construir.** Si un framework o librería madura ya lo resuelve (login, permisos, CRUD de back-office, migraciones, grilla editable, gráficos), se usa. Código propio solo para lo que es del negocio: POS, comandas, planillas de inventario, cobranza, reportes.
+2. **Lo mínimo que funciona.** Nada "por si acaso": sin colas, sin eventos de dominio, sin multi-bodega ni lotes hasta que el cliente lo pida. Cada pieza agregada debe responder a un requisito de la sección 0.
+3. **Inventario como libro de movimientos.** El stock no se edita a mano: toda entrada o salida es un movimiento con motivo, usuario y referencia, en la misma transacción que actualiza el saldo.
+4. **Carga masiva como planilla.** Todo lo que se registra en lote (mermas, ingresos, conteos, precios) se hace en una **grilla tipo Excel**, igual que Shopify y WooCommerce (ver sección 6).
+5. **Guardarraíles que no se negocian.** Validación en el servidor, transacciones, permisos por rol, idempotencia de webhooks, auditoría y backups probados.
+6. **Propiedad del cliente.** Docker Compose en un VPS a su nombre, todo open source.
 
-## 2. Stack propuesto
+## 2. Stack (v0.2)
 
-| Capa | Tecnología | Motivo |
+| Capa | Tecnología | Qué nos ahorra |
 |---|---|---|
-| Backend | Node.js + TypeScript + NestJS | Módulos nativos, DI, validación, fácil de mantener |
-| ORM | Prisma | Migraciones versionadas, tipos |
-| Base de datos | PostgreSQL 16 | Transacciones, restricciones, vistas para reportes |
-| Frontend | React + Vite + TypeScript, Tailwind | POS rápido, SPA única con rutas por rol |
-| Tiempo real | Server-Sent Events (o WebSocket) | Comandas y stock en vivo |
-| Cola de trabajos | pg-boss (sobre Postgres) | Reintentos de Shopify sin añadir Redis |
-| Gráficos | Recharts | Gráficos automáticos y proyecciones |
-| Proxy / TLS | Caddy | HTTPS automático con Let's Encrypt |
-| Despliegue | Docker Compose | Reproducible, simple de entregar al cliente |
+| Backend | **Django 5** | Login, sesiones, CSRF, usuarios, grupos y permisos, ORM, migraciones y **Django Admin** listos |
+| Base de datos | PostgreSQL 16 | Transacciones y restricciones |
+| Back-office | **Django Admin** | CRUD de catálogo, usuarios, roles, mapeo de SKU de Shopify y metas, sin pantallas propias |
+| Pantallas operativas | Plantillas Django + **HTMX** + **Alpine.js** | Interactividad sin SPA, sin build y sin API duplicada |
+| Planillas | **AG Grid Community** (MIT) | Grilla editable con teclado, copiar/pegar desde Excel, validación por celda |
+| Importar/exportar | **django-import-export** | Excel/CSV para catálogo, precios y conteos |
+| Gráficos | **Chart.js** | Reportes |
+| Shopify | Webhooks verificados con HMAC + `ShopifyAPI` para la reconciliación | Cliente oficial |
+| Proxy / TLS | Caddy | HTTPS automático |
+| Despliegue | Docker Compose | Tres contenedores: `caddy`, `app`, `db` |
 
-> Alternativa si el equipo prefiere Python: Django + DRF cubre admin, permisos y ORM de fábrica. La arquitectura lógica de abajo no cambia.
+### Qué se quitó respecto a v0.1 y por qué
+
+| Antes (v0.1) | Ahora | Motivo |
+|---|---|---|
+| NestJS + React SPA + paquete de tipos compartidos | Django + HTMX | Una sola app; sin API y frontend duplicados |
+| JWT + refresh tokens | Sesiones de Django | Ya incluidas y seguras; es una app interna |
+| Pantallas CRUD propias (catálogo, usuarios, config) | Django Admin | Gratis y probado |
+| SSE / WebSocket | HTMX con refresco cada 5 s | Suficiente para una tienda; sin infraestructura extra |
+| pg-boss (cola de trabajos) | Webhook procesado en la misma petición + comando nocturno por cron | El volumen es bajo; la idempotencia la da una clave única |
+| Eventos de dominio entre módulos | Funciones de servicio llamadas dentro de una transacción | Menos indirección |
+| Versionado de recetas | La comanda **copia** las líneas de la receta al crearse | Mismo resultado, una tabla menos |
+| Tabla `stock_level` + `location` | Columna `stock` en `item`, actualizada en la transacción del movimiento | Una bodega |
+| Tabla `receivable` | Saldo = total − pagos (consulta) | Dato derivado |
+| `cash_register` | Solo `cash_session` | Una caja |
+| Vistas materializadas | Consultas normales | Volumen pequeño |
+| Lotes y caducidad | Fuera hasta que se pida | Pregunta abierta |
 
 ## 3. Vista general
 
 ```
-                Internet
-                   │
-            ┌──────▼──────┐
-            │    Caddy    │  HTTPS, compresión
-            └──────┬──────┘
-        ┌──────────┴───────────┐
-        │                      │
-  ┌─────▼─────┐         ┌──────▼───────┐
-  │ Frontend  │         │   API (Nest) │◄──── Webhooks Shopify
-  │ React SPA │  REST   │  módulos ERP │────► Shopify Admin API
-  └───────────┘  + SSE  └──────┬───────┘
-                               │
-                 ┌─────────────┼─────────────┐
-                 │             │             │
-           ┌─────▼────┐  ┌─────▼─────┐ ┌─────▼──────┐
-           │PostgreSQL│  │ pg-boss   │ │ Backups    │
-           │          │  │ (jobs)    │ │ pg_dump→S3 │
-           └──────────┘  └───────────┘ └────────────┘
+ Navegador (POS, taller, admin)
+          │ HTTPS
+     ┌────▼────┐
+     │  Caddy  │
+     └────┬────┘
+     ┌────▼──────────────────────────┐        ┌──────────────┐
+     │ Django                        │◄───────│ Shopify      │ webhooks (HMAC)
+     │  · pantallas HTMX             │───────►│ Admin API    │ reconciliación nocturna
+     │  · Django Admin (back-office) │        └──────────────┘
+     │  · servicios de dominio       │
+     └────┬──────────────────────────┘
+     ┌────▼──────┐   cron: pg_dump diario cifrado → almacenamiento externo
+     │ Postgres  │   cron: reconciliación Shopify (manage.py)
+     └───────────┘
 ```
 
-Contenedores: `caddy`, `web` (estáticos), `api`, `db`. El worker de jobs corre dentro de `api` (o como segundo proceso del mismo imagen).
-
-## 4. Módulos del backend
+## 4. Apps de Django
 
 ```
-src/
-  auth/            usuarios, roles, permisos, sesiones
-  catalog/         productos, insumos, recetas (BOM), precios
-  inventory/       ubicaciones, lotes, libro de movimientos, stock
-  sales/           ventas, líneas, pagos, clientes
-  pos/             cajas, turnos, cierre diario
-  production/      órdenes de producción (comandas)
-  waste/           mermas
-  finance/         cuentas por cobrar, pagos, resumen de ingresos
-  reports/         vistas y consultas agregadas, proyecciones
-  integrations/
-    shopify/       webhooks, mapeo SKU, sincronización
-  common/          auditoría, eventos de dominio, utilidades
+erp/
+  catalog/      Item (insumo, arreglo, reventa), RecipeLine, ShopifySku
+  inventory/    Movement, StockSheet + StockSheetLine (planillas), servicios move()
+  sales/        Sale, SaleLine, Payment, CashSession, SalesGoal
+  production/   ProductionOrder, ProductionOrderLine (copia de receta)
+  shopify/      ShopifyEvent, vista del webhook, comando de reconciliación
+  reports/      vistas de solo lectura
 ```
 
-Regla de dependencia: los módulos se hablan por **servicios exportados y eventos de dominio**, no leyendo tablas ajenas. Ejemplo: `sales` emite `SaleConfirmed`; `inventory` y `finance` reaccionan.
+Toda regla de negocio vive en **funciones de servicio** (`inventory.services.move`, `sales.services.checkout`, `production.services.finish`…) que validan y escriben dentro de `transaction.atomic()`. Las vistas solo llaman a esas funciones.
 
-## 5. Modelo de datos (núcleo)
+## 5. Modelo de datos
 
 ### Catálogo
-- `item` — todo lo que tiene stock o se vende. `kind`: `SUPPLY` (insumo: flor, listón, papel), `PRODUCT` (arreglo terminado), `RESALE` (peluche, chocolate).
-- `item.unit`: `unit | stem | meter | gram` (cantidades exactas con `numeric(14,3)`).
-- `recipe` / `recipe_line` — receta **fija** de un producto: cuántos insumos consume. Permite descuento automático al producir. Las recetas se versionan (`version`, `active`): editar una receta crea una versión nueva y las órdenes ya creadas conservan la suya.
-- **Creación de arreglos al vuelo:** flujo "Nuevo arreglo" (desde catálogo o desde el POS) que en una sola transacción crea `item (kind=PRODUCT)` + `recipe` + precio. Permiso `catalog.create_product`; por defecto `ADMIN` y `SALES`. Queda `created_by` y entra al `audit_log`. Si algún insumo de la receta no existe, se puede crear desde el mismo formulario.
-- `shopify_variant_map` — `shopify_variant_id → item_id`.
+- `Item(sku, name, kind: SUPPLY|PRODUCT|RESALE, unit, decimals, price, cost, stock numeric(12,3), min_stock, photo, active, created_by)`.
+  - **Tipos:** *Insumo* (flores, papel, cintas; se compra y se usa en recetas, no se vende suelto), *Arreglo* (se arma con insumos; al venderse genera comanda), *Reventa* (peluches, chocolates; se compra y se vende tal cual).
+  - `photo`: `ImageField` en `/media`, redimensionada a 600 px al subirla.
+- `RecipeLine(product, supply, qty)`: materiales del arreglo, en la unidad base de cada insumo (ej. 6 tallos, 1.5 m de cinta, 0.25 kg de musgo).
+- `ShopifySku(shopify_variant_id, item)`: mapeo editable en el Admin.
 
-### Inventario (libro de movimientos)
-- `stock_movement(id, item_id, location_id, qty, type, ref_type, ref_id, user_id, created_at)`
-  - `qty` firmado (+ entra, − sale).
-  - `type`: `PURCHASE_IN | SALE_OUT | PRODUCTION_CONSUME | PRODUCTION_OUTPUT | WASTE | ADJUSTMENT | SHOPIFY_OUT | RETURN`.
-- `stock_level(item_id, location_id, qty)` — tabla de saldo actualizada **en la misma transacción** que el movimiento (con `CHECK (qty >= 0)` configurable por ítem). Es lo que lee la UI en tiempo real.
-- Opcional fase 2: `lot` con fecha de ingreso/caducidad para flor fresca (FEFO).
+### Unidades de medida y presentaciones
+- **Unidad base** (`unit`): en qué se cuenta el stock y se escriben las recetas: `unidad`, `tallo`, `rama`, `pliego`, `kg`, `g`, `metro`, `litro`. Es **una sola por item**; todo el stock y todos los costos se guardan en ella.
+- **Decimales** (`decimals`): kg, metro y litro admiten fracciones (0.25 kg); tallo y unidad solo enteros. El servidor rechaza cantidades fraccionarias donde no corresponden.
+- **Presentación de compra** `Packaging(item, name, factor)`: cómo lo vende el proveedor. "Paquete x25" = 25 tallos; "Saco 5 kg" = 5 kg; "Caja x6" = 6 unidades. Un item puede tener varias.
+- **Ingreso:** se elige la presentación y la cantidad; el sistema suma `cantidad × factor` en la unidad base. Si se indica el costo por presentación, el costo por unidad base se recalcula con **promedio ponderado**: `(stock × costo + entra × costo_nuevo) / (stock + entra)`.
+- **Venta por peso o medida:** si un producto de reventa está en kg o metro, el POS pide la cantidad (0.25 kg) y cobra `precio × cantidad`.
+- **Costo de un arreglo** = Σ (cantidad del material × costo por unidad base). Se muestra con el margen al crear o editar el arreglo.
 
-### Ventas y caja
-- `customer`, `sale(id, source: POS|SHOPIFY|PHONE, status, seller_id, register_id, total, ...)`, `sale_line`, `payment(method, amount, ...)`.
-- `cash_register`, `cash_session(opened_by, opened_at, opening_float, closed_at, counted_cash, expected_cash, difference)` → **cierre de caja diario**.
+### Alta y edición de productos (ficha)
+Pantalla **Catálogo**:
+- **Grilla editable** para cambios masivos de precio, costo y stock mínimo (como el editor masivo de Shopify), guardados en una sola transacción.
+- **Ficha de producto** para crear o editar uno: foto (subir o arrastrar), tipo, nombre, SKU automático, y según el tipo:
+  - *Arreglo:* precio de venta y lista de materiales (insumo + cantidad con su unidad), con costo y margen en vivo.
+  - *Insumo / Reventa:* unidad base, decimales, costo por unidad base, precio de venta (reventa), stock mínimo y presentaciones de compra.
+- Administración crea y edita todo; ventas solo crea arreglos nuevos. En la app final, la grilla y la ficha cubren el día a día y Django Admin queda para casos raros.
+
+### Inventario
+- `Movement(item, qty firmado, type, reason, sheet?, ref, user, created_at)`.
+  - `type`: `PURCHASE_IN | SALE_OUT | SHOPIFY_OUT | PRODUCTION_CONSUME | WASTE | COUNT_ADJUST`.
+  - `inventory.services.move()` valida, bloquea la fila del item (`select_for_update`), impide stock negativo y escribe movimiento + saldo juntos.
+- `StockSheet(kind: WASTE|PURCHASE|COUNT, status: DRAFT|POSTED, note, created_by, posted_by, posted_at)` y `StockSheetLine(sheet, item, reason?, qty, unit_cost)`.
+  - Una planilla se puede guardar como borrador y se **contabiliza** una sola vez: todas sus líneas generan movimientos en una transacción. Si una línea falla, no se registra ninguna.
+
+### Ventas, caja y metas
+- `Sale(source: POS|SHOPIFY, status, seller, customer_name, customer_phone, total)`, `SaleLine(sale, item, qty, price)`.
+- `Payment(sale, method, amount, reference)`. Estado de la venta derivado: `PAID | PARTIAL | UNPAID | PENDING_PAYMENT`.
+- `CashSession(opened_by, opening_float, opened_at, closed_at, counted, expected)`.
+- `SalesGoal(seller, month, target)`. El avance se calcula por consulta.
 
 ### Producción
-- `production_order(id, sale_line_id?, product_item_id, qty, status, assigned_to, due_at, notes)`
-  - Estados: `PENDING → IN_PROGRESS → DONE | CANCELLED`.
-  - Al pasar a `DONE` genera `PRODUCTION_CONSUME` por cada línea de la receta (versión congelada en la orden).
-  - Si se desperdicia material durante la producción, se registra aparte como merma (`PRODUCTION_ERROR`), no modificando la receta.
-
-### Mermas
-- `waste_record(item_id, qty, reason, location_id, user_id, notes, created_at)` con `reason` catálogo: `WILTED | DAMAGED | EXPIRED | PRODUCTION_ERROR | OTHER`. Genera un `stock_movement` tipo `WASTE`.
-
-### Metas de venta (bonos)
-- `sales_goal(id, seller_id, period_type: MONTH|QUARTER|YEAR|CUSTOM, period_start, period_end, target_amount, set_by, created_at)`.
-- Solo `ADMIN` crea/edita metas. Avance = suma de `sale.total` pagadas del vendedor en el periodo (excluye anuladas/devueltas), calculado por consulta.
-- Pantalla: tabla por vendedor con meta, vendido, % de avance, faltante y estado `ALCANZADA / EN CURSO / NO ALCANZADA`. El vendedor ve solo su propio avance.
-
-### Finanzas
-- `receivable(sale_id, customer_id, amount, due_date, status)` y `payment` aplicables a una o varias cuentas.
-- Estado de pago del pedido derivado: `UNPAID | PARTIAL | PAID`.
+- `ProductionOrder(sale_line, product, qty, status: PENDING|IN_PROGRESS|DONE)` + `ProductionOrderLine(order, supply, qty)` copiadas de la receta al crearla.
+- Al pasar a `DONE` se descuentan esas líneas. Solo se permite avanzar un estado a la vez (`PENDING → IN_PROGRESS → DONE`).
 
 ### Usuarios
-- `user`, `role`, `permission`, `user_role`. Roles iniciales: `ADMIN`, `SALES`, `PRODUCTION`. Permisos granulares por módulo/acción (`sales.create`, `inventory.adjust`, `reports.view`, …).
-- `audit_log(user_id, action, entity, entity_id, before, after, at)` para ajustes, anulaciones y cierres.
+- Usuarios y **grupos** de Django: `Administracion`, `Ventas`, `Produccion`, con permisos por modelo y acción.
 
-## 6. Flujos críticos
+## 6. Planillas tipo Excel
 
-### 6.1 Venta en POS
-1. Cajero abre `cash_session`.
-2. Crea `sale` con líneas y pagos → transacción única.
-3. Si el ítem es `RESALE`: descuenta stock inmediato (`SALE_OUT`).
-4. Si es `PRODUCT` bajo pedido: crea `production_order` (comanda digital) y el stock de insumos se descuenta al producir.
-5. Si hay saldo pendiente: crea `receivable`.
+### Por qué Shopify y WooCommerce usan celdas
+- **Se registra en lote, no de a uno.** Al cerrar el día la florista revisa 30 insumos; con un formulario por merma son 30 envíos, con una grilla es una pasada.
+- **Teclado primero.** Tab, Enter y flechas para moverse; escribir un número y seguir. Sin abrir modales ni buscar en selects.
+- **Copiar y pegar desde Excel.** El proveedor manda su guía en Excel; se pega directo en la columna de cantidades.
+- **Ver todo antes de confirmar.** Totales por fila y columna, valor en soles y stock resultante en vivo; las celdas inválidas se marcan antes de guardar.
+- **Un solo guardado atómico.** Todo o nada, con un registro de la planilla para revisar después.
 
-### 6.2 Comanda digital
-- Pantalla de producción con tablero (Pendiente / En proceso / Listo) en vivo por SSE; reemplaza la comanda física.
-- Al completar: consume insumos según receta (o real), registra diferencia como merma opcional.
+### Un solo componente, cuatro usos
+| Planilla | Filas | Columnas editables | Resultado |
+|---|---|---|---|
+| **Mermas** | Insumos y reventa | Una columna por motivo: Marchita, Dañada, Vencida, Error de producción, Otro + nota | Movimientos `WASTE` por motivo |
+| **Ingreso de mercadería** | Insumos y reventa | Presentación (Paquete x25, suelto…), cantidad, costo por presentación | Movimientos `PURCHASE_IN` en unidad base y costo promedio |
+| **Conteo físico** | Insumos y reventa | Stock contado | Diferencia contra el sistema → `COUNT_ADJUST` |
+| **Catálogo** | Todos los productos | Nombre, precio, costo, mínimo de stock | Actualización masiva con auditoría |
 
-### 6.3 Shopify → ERP
-1. Webhooks `orders/create`, `orders/paid`, `orders/cancelled` y `refunds/create` llegan a `/integrations/shopify/webhook`. `orders/create` solo registra el pedido (`sale` en estado `PENDING_PAYMENT`, sin tocar stock); **`orders/paid` es el que descuenta**.
-2. **Verificar HMAC** con el secreto de la app. Rechazar si falla.
-3. Guardar el payload crudo en `shopify_event(id_shopify, topic, payload, status)` con **unique** sobre `X-Shopify-Webhook-Id` → idempotencia.
-4. Encolar job; el job mapea variantes con `shopify_variant_map`; al pagarse, descuenta stock (`SHOPIFY_OUT`) para `RESALE` o genera `production_order` para `PRODUCT`. Riesgo asumido: entre crear y pagar no hay reserva, así que dos pedidos podrían competir por el último insumo; si el stock queda negativo se marca `NEEDS_ATTENTION`. Reservas quedan como mejora futura.
-5. SKUs sin mapeo → evento en estado `NEEDS_ATTENTION` y alerta en el panel de admin (no se pierde el pedido).
-6. Reconciliación nocturna: job que consulta la Admin API y compara pedidos de las últimas 48 h para atrapar webhooks perdidos.
-7. Opcional (fase 2): empujar stock del ERP a Shopify (`inventory_levels/set`) para evitar sobreventa.
+### Reglas de la grilla
+- Columnas fijas: insumo (congelada a la izquierda), unidad y stock actual. Columnas calculadas: total, stock final y valor S/.
+- Validación por celda: números ≥ 0, no más que el stock disponible y decimales solo si la unidad lo permite. Las celdas en error se pintan en rojo y bloquean el guardado.
+- Las celdas modificadas se resaltan. Contador "N filas con cambios". Aviso al salir con cambios sin guardar.
+- Filtro por texto y "solo con cambios". Fila de totales al pie.
+- Confirmación con resumen antes de contabilizar (ej. "Se registrarán 12 mermas por S/ 84.50").
 
-### 6.4 Cierre de caja
-Esperado = fondo inicial + ventas en efectivo − egresos. El cajero ingresa el conteo; el sistema guarda la diferencia y bloquea nuevas ventas en esa sesión. Genera el resumen del día.
+## 7. Flujos críticos
 
-## 7. Reportes y estadísticas
+### 7.1 Venta en POS
+1. Requiere caja abierta.
+2. `checkout()` toma precios de la base, valida stock de reventa y crea venta, líneas y pagos en una transacción.
+3. Reventa: movimiento `SALE_OUT`. Arreglo: comanda con copia de la receta.
+4. Si queda saldo, se exige cliente; el saldo aparece en Cobranza.
 
-Vistas SQL (y vistas materializadas para periodos grandes) alimentadas por `sale`, `sale_line`, `payment`:
-- Productos más vendidos por mes / por año.
-- Ventas por periodo y **por vendedor**, junto con el avance contra `sales_goal` (metas de bono).
-- Ingresos vs. cuentas por cobrar.
-- Mermas por insumo y motivo.
-- **Proyecciones:** inicio simple (media móvil / tendencia lineal sobre ventas mensuales, estacionalidad por fechas clave: San Valentín, Día de la Madre). Se mejora con histórico acumulado.
+### 7.2 Comanda digital
+Tablero Pendiente / En proceso / Lista que se refresca cada 5 s. Al marcar lista se descuentan los insumos copiados en la comanda. El desperdicio durante la producción se registra en la planilla de mermas con motivo "Error de producción".
 
-## 8. Seguridad
+### 7.3 Shopify → ERP
+1. Webhooks `orders/create`, `orders/paid`, `orders/cancelled`, `refunds/create`.
+2. Verificar HMAC; rechazar si falla.
+3. `ShopifyEvent` con clave única sobre `X-Shopify-Webhook-Id`: un reintento no se procesa dos veces.
+4. `orders/create` registra la venta como `PENDING_PAYMENT`; `orders/paid` descuenta stock o crea comandas.
+5. SKU sin mapeo o stock insuficiente: evento `NEEDS_ATTENTION` visible en el Admin; el pedido no se pierde.
+6. Cron nocturno compara las últimas 48 h con la Admin API para recuperar webhooks perdidos.
 
-- Autenticación con JWT de corta vida + refresh token en cookie `HttpOnly`; contraseñas con argon2.
-- Autorización por rol y permiso en un guard global; el frontend solo oculta, el backend decide.
-- HTTPS obligatorio, CORS restringido, rate limiting en login y webhooks.
-- Secretos en `.env` fuera del repositorio; el cliente conserva el control.
-- Auditoría de operaciones sensibles (anular venta, ajuste de stock, cierre de caja).
-- Backups diarios de Postgres cifrados + prueba de restauración documentada.
+### 7.4 Cierre de caja
+Esperado = fondo inicial + cobros en efectivo de la sesión. El cajero ingresa lo contado; se guarda la diferencia y se cierra la sesión.
 
-## 9. Despliegue en VPS
+## 8. Reportes
+Consultas directas con Chart.js: más vendidos por mes y año, ventas por vendedor contra su meta, cobrado vs. por cobrar, mermas por insumo y motivo (en soles), stock bajo. Proyección simple: promedio de los mismos meses de años anteriores cuando haya histórico.
 
-- Requisitos orientativos: 2 vCPU, 4 GB RAM, 40 GB SSD, Ubuntu LTS.
-- `docker compose up -d` con volúmenes para Postgres y backups.
-- CI en GitHub Actions: lint, tests, build de imágenes. Despliegue por `git pull` + `docker compose pull && up -d`, con migraciones automáticas al arrancar.
-- Entregables al cliente: código fuente completo, `README` de operación, runbook de backup/restore, accesos del VPS y de la cuenta de GitHub a su nombre.
+## 9. Seguridad
+- Sesiones de Django, contraseñas con el hasher por defecto (PBKDF2/argon2), CSRF activo.
+- Permisos por grupo verificados en cada vista y servicio; la interfaz solo oculta.
+- HTTPS, límite de intentos de login (`django-axes`), webhooks con HMAC.
+- `.env` fuera del repositorio.
+- Auditoría: `LogEntry` del Admin + quién contabilizó cada planilla, cerró caja o anuló venta.
+- Backup diario cifrado y prueba de restauración documentada.
 
-## 10. Estructura del repositorio
+## 10. Despliegue
+VPS de 2 vCPU y 2–4 GB de RAM con Ubuntu LTS. `docker compose up -d`; las migraciones corren al arrancar. CI con GitHub Actions (tests + build). Entregables: código fuente, README de operación, runbook de backup y restauración, accesos a nombre del cliente.
 
+## 11. Estructura del repositorio
 ```
 ERP-Demo/
-  apps/
-    api/          NestJS
-    web/          React + Vite
-  packages/
-    shared/       tipos y esquemas compartidos (zod)
-  infra/
-    docker-compose.yml
-    Caddyfile
-    backup/
+  erp/            proyecto Django (apps de la sección 4)
+  templates/      pantallas HTMX
+  static/         Alpine, AG Grid, Chart.js (versiones fijas)
+  infra/          docker-compose.yml, Caddyfile, backup/
+  demo/           prototipo sin dependencias
   docs/
-    ARCHITECTURE.md
-  .github/workflows/
 ```
 
-## 11. Plan por fases
-
+## 12. Plan por fases
 | Fase | Contenido |
 |---|---|
-| 0 | Levantamiento, validar este documento, catálogo real de insumos y recetas |
-| 1 | Auth y roles, catálogo, inventario (movimientos + stock en vivo) |
-| 2 | POS, caja y cierre diario |
-| 3 | Producción (comandas digitales) y mermas |
-| 4 | Finanzas y cobranza |
-| 5 | Integración Shopify (webhooks, mapeo, reconciliación) |
-| 6 | Reportes, gráficos y proyecciones |
-| 7 | Hardening, backups, despliegue en VPS del cliente, capacitación |
+| 0 | Levantamiento: catálogo real, recetas, motivos de merma |
+| 1 | Modelos, Django Admin, grupos y permisos, carga inicial por Excel |
+| 2 | Inventario: servicio de movimientos + **planillas** (ingreso, mermas, conteo) |
+| 3 | POS, caja y cierre |
+| 4 | Comandas y cobranza |
+| 5 | Shopify |
+| 6 | Reportes, despliegue, backups y capacitación |
 
-## 12. Preguntas abiertas para el levantamiento
-
-Resueltas o asumidas (ver sección 0): bonos, recetas fijas, arreglos nuevos, una bodega, descuento al pagarse, sin facturación, quién crea arreglos. Pendientes:
-
-1. ¿Se necesita control por lote y caducidad de flor fresca?
-2. ¿El cobro con tarjeta en tienda es por terminal físico o se usará Culqi también presencialmente? ¿Se quiere link de pago para pedidos por teléfono? ¿Se aceptan Yape/Plin y transferencias?
-3. ¿Marca y modelo de la impresora térmica? ¿Hay cajón de dinero o lector de códigos?
-4. ¿Las metas de venta son mensuales, anuales o por periodos libres? ¿Ven los vendedores su avance?
-5. ¿Volumen aproximado de pedidos diarios y picos (fechas especiales)?
-6. ¿Idioma, moneda e impuestos (un solo país/IVA)? (Culqi sugiere Perú: PEN e IGV, por confirmar)
-7. ¿El cliente tiene ya VPS/proveedor preferido?
+## 13. Preguntas abiertas
+1. ¿Control por lote y caducidad de flor fresca?
+2. ¿Tarjeta en tienda con terminal físico o Culqi? ¿Link de pago para pedidos por teléfono?
+3. ¿Modelo de impresora térmica? ¿Cajón de dinero o lector de códigos?
+4. ¿Volumen diario de pedidos y picos en fechas especiales?
+5. ¿Moneda e impuestos? (se asume Perú: PEN e IGV)
+6. ¿Proveedor de VPS preferido?
+7. ¿Las mermas se registran al cierre del día, por turno o cuando ocurren?
